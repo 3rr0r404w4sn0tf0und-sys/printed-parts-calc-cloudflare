@@ -11,6 +11,6 @@
     "occt-import-js": "^0.0.22"
   },
   "devDependencies": {
-    "wrangler": "^3.60.0"
+    "wrangler": "^4.0.0"
   }
 }
