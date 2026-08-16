@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 # KV namespace for geometry blobs, price-fetch job status, and thumbnails.
 # Create with: wrangler kv namespace create GEOMETRY_KV
 kv_namespaces = [
-  { binding = "GEOMETRY_KV", id = "REPLACE_WITH_KV_NAMESPACE_ID" }
+  { binding = "GEOMETRY_KV", id = "4cb1a32fc692468a9ec5739299b6e498" }
 ]
 
 [vars]
