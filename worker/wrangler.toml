@@ -1,6 +1,6 @@
 name = "printed-parts-calc-cloudflare"
 main = "src/index.js"
-compatibility_date = "2024-09-01"
+compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
 # KV namespace for geometry blobs, price-fetch job status, and thumbnails.
