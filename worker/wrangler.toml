@@ -1,15 +1,15 @@
-name = "printed-parts-calc-cloudflare"
+name = "printed-parts-calc"
 main = "src/index.js"
-compatibility_date = "2024-09-23"
+compatibility_date = "2024-09-01"
 compatibility_flags = ["nodejs_compat"]
 
 # KV namespace for geometry blobs, price-fetch job status, and thumbnails.
 # Create with: wrangler kv namespace create GEOMETRY_KV
 kv_namespaces = [
-  { binding = "GEOMETRY_KV", id = "4cb1a32fc692468a9ec5739299b6e498" }
+  { binding = "GEOMETRY_KV", id = "REPLACE_WITH_KV_NAMESPACE_ID" }
 ]
 
 [vars]
 # Non-secret vars can go here. Secrets (GITHUB_TOKEN, INTERNAL_SCRAPE_SECRET)
 # are set via `wrangler secret put <NAME>` instead -- do not put them here.
-GITHUB_REPO = "3rr0r404w4sn0tf0und-sys/printed-parts-calc-cloudflare"
+GITHUB_REPO = "your-github-username/printed-parts-calc"

@@ -20,8 +20,9 @@ upload.post("/upload", async (c) => {
 
     const id = crypto.randomUUID();
 
-    // Mesh data isn't needed after the thumbnail is rendered, so we only
-    // persist the lightweight fields calc/bed-fit actually use.
+    // Store lightweight stats for calc, plus the mesh itself (as compact
+    // typed-array JSON) so the frontend bed viewer can render + let the
+    // user rotate the actual part.
     const stored = {
       volume_mm3: geometry.volume_mm3,
       surface_area_mm2: geometry.surface_area_mm2,
@@ -34,6 +35,11 @@ upload.post("/upload", async (c) => {
     await c.env.GEOMETRY_KV.put(`thumbnail:${id}`, svg, {
       expirationTtl: 60 * 60 * 24,
     });
+    await c.env.GEOMETRY_KV.put(
+      `mesh:${id}`,
+      JSON.stringify({ positions: geometry.mesh.positions, indices: geometry.mesh.indices }),
+      { expirationTtl: 60 * 60 * 24 }
+    );
 
     return c.json({
       id,
@@ -42,6 +48,7 @@ upload.post("/upload", async (c) => {
       surface_area_mm2: geometry.surface_area_mm2,
       bbox: geometry.bbox,
       thumbnail_url: `/api/thumbnail/${id}`,
+      mesh_url: `/api/mesh/${id}`,
     });
   } catch (err) {
     return c.json({ error: err.message }, 500);
@@ -52,6 +59,12 @@ upload.get("/thumbnail/:id", async (c) => {
   const svg = await c.env.GEOMETRY_KV.get(`thumbnail:${c.req.param("id")}`);
   if (!svg) return c.notFound();
   return c.body(svg, 200, { "Content-Type": "image/svg+xml" });
+});
+
+upload.get("/mesh/:id", async (c) => {
+  const mesh = await c.env.GEOMETRY_KV.get(`mesh:${c.req.param("id")}`);
+  if (!mesh) return c.notFound();
+  return c.body(mesh, 200, { "Content-Type": "application/json" });
 });
 
 export default upload;
