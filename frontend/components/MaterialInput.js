@@ -1,13 +1,18 @@
 "use client";
 import { useState, useRef } from "react";
 import { API_BASE } from "../lib/apiBase";
+import { colors, label, input } from "../lib/theme";
 
-const box = { border: "1px solid #2a2d34", borderRadius: 8, padding: 12, marginBottom: 12, background: "#161821" };
-const input = { width: "100%", padding: "6px 8px", marginTop: 4, marginBottom: 8, background: "#0f1115", border: "1px solid #2a2d34", borderRadius: 6, color: "#e6e6e6" };
-const label = { fontSize: 12, color: "#9aa0ab" };
+const box = {
+  border: `1px solid ${colors.panelBorder}`,
+  borderRadius: 8,
+  padding: 12,
+  marginBottom: 12,
+  background: "rgba(255,255,255,0.02)",
+};
 
 const POLL_INTERVAL_MS = 3000;
-const POLL_TIMEOUT_MS = 90_000; // Actions cold-start + scrape can take a minute+
+const POLL_TIMEOUT_MS = 90_000;
 
 export default function MaterialInput({ title, material, onChange }) {
   const [fetching, setFetching] = useState(false);
@@ -71,46 +76,58 @@ export default function MaterialInput({ title, material, onChange }) {
 
   return (
     <div style={box}>
-      <strong>{title}</strong>
+      <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>{title}</div>
 
-      <div style={label}>Product link</div>
-      <div style={{ display: "flex", gap: 8 }}>
+      <label style={label}>Product link</label>
+      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
         <input
           style={{ ...input, flex: 1 }}
           placeholder="https://..."
           value={material.link || ""}
           onChange={(e) => onChange({ ...material, link: e.target.value })}
         />
-        <button onClick={fetchPrice} disabled={fetching || !material.link} style={{ height: 34 }}>
-          {fetching ? "Scraping…" : "Fetch price"}
+        <button
+          onClick={fetchPrice}
+          disabled={fetching || !material.link}
+          style={{
+            fontSize: 12, padding: "0 12px", borderRadius: 6, border: `1px solid ${colors.panelBorder}`,
+            background: fetching ? colors.inputBg : colors.accent, color: "#fff", cursor: fetching ? "default" : "pointer",
+            opacity: !material.link ? 0.5 : 1,
+          }}
+        >
+          {fetching ? "…" : "Fetch"}
         </button>
       </div>
       {fetching && (
-        <div style={{ fontSize: 11, color: "#9aa0ab", marginBottom: 8 }}>
-          Triggered a GitHub Action to scrape this -- can take up to a minute.
+        <div style={{ fontSize: 10.5, color: colors.textFaint, marginBottom: 8 }}>
+          Triggered a GitHub Action to scrape this — can take up to a minute.
         </div>
       )}
-      {fetchError && <div style={{ color: "#e08080", fontSize: 12, marginBottom: 8 }}>{fetchError}</div>}
+      {fetchError && <div style={{ color: colors.bad, fontSize: 11.5, marginBottom: 8 }}>{fetchError}</div>}
       {material.price_per_unit != null && (
-        <div style={{ fontSize: 12, color: "#8fd19e", marginBottom: 8 }}>
+        <div style={{ fontSize: 11.5, color: colors.good, marginBottom: 8 }}>
           Found: ${material.price_per_unit.toFixed(2)} ({material.price_source})
         </div>
       )}
 
       <div style={{ display: "flex", gap: 8 }}>
         <div style={{ flex: 1 }}>
-          <div style={label}>Spool weight (g)</div>
+          <label style={label}>Spool weight (g)</label>
           <input type="number" style={input} placeholder="1000" value={material.spool_weight_g || ""}
             onChange={(e) => onChange({ ...material, spool_weight_g: parseFloat(e.target.value) })} />
         </div>
         <div style={{ flex: 1 }}>
-          <div style={label}>Density (g/cm³)</div>
+          <label style={label}>Density (g/cm³)</label>
           <input type="number" step="0.01" style={input} placeholder="1.24" value={material.density_g_cm3 || ""}
             onChange={(e) => onChange({ ...material, density_g_cm3: parseFloat(e.target.value) })} />
         </div>
       </div>
 
-      {pricePerKg != null && <div style={{ fontSize: 12, color: "#9aa0ab" }}>≈ ${pricePerKg.toFixed(2)} / kg</div>}
+      {pricePerKg != null && (
+        <div style={{ fontSize: 11, color: colors.textDim, marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>
+          ≈ ${pricePerKg.toFixed(2)} / kg
+        </div>
+      )}
     </div>
   );
 }
