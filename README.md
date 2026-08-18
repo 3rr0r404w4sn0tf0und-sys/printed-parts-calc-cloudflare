@@ -60,23 +60,29 @@ In your repo's Settings > Secrets and variables > Actions, add:
 - `APIFY_TOKEN`, `APIFY_AMAZON_ACTOR_ID` -- same as BOM-tool
 - `INTERNAL_SCRAPE_SECRET` -- any random string, must match the Worker secret below
 
-### 2. Cloudflare Worker
-```
-cd worker
-npm install
-wrangler kv namespace create GEOMETRY_KV   # copy the id into wrangler.toml
-wrangler secret put GITHUB_TOKEN            # fine-grained PAT: Actions:write, Contents:read on this repo
-wrangler secret put INTERNAL_SCRAPE_SECRET  # same value as the GitHub secret above
-wrangler deploy
-```
-Update `GITHUB_REPO` in `wrangler.toml` to `your-username/your-repo`.
+### 3. Single Cloudflare Worker (frontend + API, no Pages)
 
-### 3. Cloudflare Pages (frontend)
-Connect the repo in the Cloudflare dashboard, set:
-- Build command: `npm run build`
-- Build output directory: `out`
-- Root directory: `frontend`
-- Env var: `NEXT_PUBLIC_API_BASE` = your deployed Worker URL (e.g. `https://printed-parts-calc.<subdomain>.workers.dev`)
+The frontend and API now live on **one Worker** using Cloudflare's static
+assets feature -- no separate Pages project. In the Cloudflare dashboard:
+
+- Workers & Pages > Create > connect this GitHub repo
+- **Root directory**: leave blank (repo root)
+- **Build command**: `npm run build` (builds the frontend into `frontend/out`)
+- **Deploy command**: `npx wrangler deploy` (deploys the Worker, which
+  picks up `frontend/out` as static assets per the root `wrangler.toml`)
+
+Requests that match a built frontend file (the HTML/JS/CSS) are served
+directly as static assets. Anything else -- i.e. `/api/*` -- falls
+through to the Worker's `fetch` handler. One deploy, one URL, no CORS
+to worry about since it's all same-origin now.
+
+Update `GITHUB_REPO` in the root `wrangler.toml` to `your-username/your-repo`
+if it isn't already set.
+
+Set the two secrets under **Settings > Variables and Secrets**:
+`GITHUB_TOKEN` (fine-grained PAT, Actions:write + Contents:read on this
+repo) and `INTERNAL_SCRAPE_SECRET` (matches the GitHub repo secret of
+the same name).
 
 ### 4. Test
 Open the Pages URL, upload a small STEP/STL, confirm the SVG thumbnail
