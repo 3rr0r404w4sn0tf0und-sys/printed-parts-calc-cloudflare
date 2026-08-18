@@ -18,6 +18,14 @@ import occtimportjs from "occt-import-js";
 let occtInstance = null;
 async function getOcct() {
   if (!occtInstance) {
+    // occt-import-js's bundled emscripten glue reaches for CommonJS
+    // globals (__dirname, __filename) that Workers doesn't provide even
+    // with nodejs_compat on -- shim them before the module's init code
+    // actually runs. Since static imports are hoisted above this file's
+    // own code, the shim has to happen before the dynamic import below,
+    // not before the top-level `import occtimportjs from "occt-import-js"`.
+    if (typeof globalThis.__dirname === "undefined") globalThis.__dirname = "/";
+    if (typeof globalThis.__filename === "undefined") globalThis.__filename = "/index.js";
     occtInstance = await occtimportjs();
   }
   return occtInstance;
