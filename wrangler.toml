@@ -3,24 +3,26 @@ main = "worker/src/index.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
-# Static frontend build output is served directly by Cloudflare for any
-# request that matches a file in here. Anything that doesn't match
-# (i.e. /api/*) falls through to the Worker's fetch handler below --
-# no separate Pages project needed.
-[assets]
-directory = "frontend/out"
-binding = "ASSETS"
-# Single-page app: unmatched paths (there's only one page, "/") fall
-# back to index.html rather than 404ing.
-not_found_handling = "single-page-application"
+# Deploys happen via CI (npx wrangler deploy on every push). Without this,
+# each deploy wipes out any secrets/vars set through the dashboard --
+# this keeps dashboard-set secrets (GITHUB_TOKEN, INTERNAL_SCRAPE_SECRET)
+# intact across deploys instead of requiring them in this file.
+keep_vars = true
 
-# KV namespace for geometry blobs, price-fetch job status, and thumbnails.
 kv_namespaces = [
   { binding = "GEOMETRY_KV", id = "4cb1a32fc692468a9ec5739299b6e498" }
 ]
 
 [vars]
-# Non-secret vars can go here. Secrets (GITHUB_TOKEN, INTERNAL_SCRAPE_SECRET)
-# are set via the dashboard's Settings > Variables and Secrets instead --
-# do not put them here.
 GITHUB_REPO = "3rr0r404w4sn0tf0und-sys/printed-parts-calc-cloudflare"
+
+# Static frontend build output is served directly by Cloudflare for any
+# request that matches a file in here. Anything that doesn't match
+# (i.e. /api/*) falls through to the Worker's fetch handler. This has to
+# come AFTER the top-level keys above -- TOML attaches any key following
+# a [table] header to that table until the next header, so kv_namespaces
+# ended up nested inside [assets] when it was declared afterward.
+[assets]
+directory = "frontend/out"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
