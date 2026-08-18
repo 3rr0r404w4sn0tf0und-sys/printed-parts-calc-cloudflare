@@ -13,19 +13,26 @@
  * init path has changed across versions.
  */
 
+// Workers bundles .wasm imports as precompiled WebAssembly.Module objects
+// (not raw bytes), and emscripten's own environment detection misreads
+// Workers as Node (nodejs_compat defines process.versions.node), which
+// routes it into a fs.readFileSync path that doesn't exist here. Handing
+// it the precompiled module via `instantiateWasm` bypasses all of that
+// file-loading logic entirely -- no fs, no fetch, no environment guessing.
+import occtWasmModule from "occt-import-js/dist/occt-import-js.wasm";
+
 let occtInstance = null;
 async function getOcct() {
   if (!occtInstance) {
-    // occt-import-js's bundled emscripten glue reaches for CommonJS
-    // globals (__dirname, __filename) at *module evaluation* time, not
-    // just when called -- so the shim has to be set before the import
-    // itself runs. Static imports are hoisted above everything else in
-    // the file, so this only works via a dynamic import() done here,
-    // after the globals are already set.
-    if (typeof globalThis.__dirname === "undefined") globalThis.__dirname = "/";
-    if (typeof globalThis.__filename === "undefined") globalThis.__filename = "/index.js";
     const { default: occtimportjs } = await import("occt-import-js");
-    occtInstance = await occtimportjs();
+    occtInstance = await occtimportjs({
+      instantiateWasm(imports, successCallback) {
+        WebAssembly.instantiate(occtWasmModule, imports).then((instance) => {
+          successCallback(instance, occtWasmModule);
+        });
+        return {}; // emscripten expects an (possibly empty) exports object back synchronously
+      },
+    });
   }
   return occtInstance;
 }

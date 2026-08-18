@@ -4,6 +4,14 @@ import { renderSvgThumbnail } from "../lib/svgThumbnail.js";
 
 const upload = new Hono();
 
+const SUPPORTED_FORMATS = {
+  stl: "stl",
+  step: "step",
+  stp: "step",
+  iges: "iges",
+  igs: "iges",
+};
+
 upload.post("/upload", async (c) => {
   const form = await c.req.formData();
   const file = form.get("file");
@@ -11,7 +19,25 @@ upload.post("/upload", async (c) => {
 
   const name = file.name || "part";
   const ext = name.split(".").pop().toLowerCase();
-  const format = ext === "stl" ? "stl" : ext === "igs" || ext === "iges" ? "iges" : "step";
+  const format = SUPPORTED_FORMATS[ext];
+
+  if (!format) {
+    // Track unsupported-format attempts (per extension) so it's easy to
+    // see later whether adding a format like OBJ is actually worth it,
+    // rather than guessing. Best-effort -- a KV write failure here
+    // shouldn't block returning the error to the user.
+    try {
+      const key = `unsupported-format:${ext}`;
+      const current = parseInt((await c.env.GEOMETRY_KV.get(key)) || "0", 10);
+      await c.env.GEOMETRY_KV.put(key, String(current + 1));
+    } catch {
+      // ignore -- stats tracking is non-critical
+    }
+    return c.json(
+      { error: `.${ext} isn't supported yet -- currently STEP/STP, IGES/IGS, and STL only.` },
+      400
+    );
+  }
 
   try {
     const arrayBuffer = await file.arrayBuffer();
@@ -65,6 +91,18 @@ upload.get("/mesh/:id", async (c) => {
   const mesh = await c.env.GEOMETRY_KV.get(`mesh:${c.req.param("id")}`);
   if (!mesh) return c.notFound();
   return c.body(mesh, 200, { "Content-Type": "application/json" });
+});
+
+// Quick way to check demand for unsupported formats (e.g. OBJ) without
+// digging through KV manually -- visit /api/format-stats.
+upload.get("/format-stats", async (c) => {
+  const list = await c.env.GEOMETRY_KV.list({ prefix: "unsupported-format:" });
+  const stats = {};
+  for (const key of list.keys) {
+    const ext = key.name.replace("unsupported-format:", "");
+    stats[ext] = parseInt((await c.env.GEOMETRY_KV.get(key.name)) || "0", 10);
+  }
+  return c.json(stats);
 });
 
 export default upload;
