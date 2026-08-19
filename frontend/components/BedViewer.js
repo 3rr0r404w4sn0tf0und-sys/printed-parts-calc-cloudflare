@@ -4,31 +4,38 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 /**
- * Fake 3D print bed: shows the part mesh sitting on a grid sized to the
- * selected printer's bed, lets the user drag directly on the part to
- * rotate it, and reports the rotated bounding box back up (used for
- * bed-fit checking and footprint-dependent settings like brim/raft).
+ * Fake 3D print bed. Three interaction modes, switched via toolbar buttons:
+ *  - Rotate (default): drag the part to spin it in place. Drag empty space
+ *    to orbit the camera (OrbitControls).
+ *  - Move: drag the part to slide it around the bed plate (X/Z only,
+ *    raycast against the y=0 plane so it tracks the cursor exactly).
+ *    Position is clamped to stay within the printer's bed dims.
+ *  - Flip to face: click a triangle on the part and it reorients so that
+ *    face points straight down (classic slicer "place on face").
  *
- * Camera orbit (drag on empty space) is handled by OrbitControls.
- * Dragging on the part itself instead rotates the part in place.
- *
- * After any rotation (drag, nudge buttons, or face-flip) the part is
- * re-dropped to the bed and re-centered in X/Z -- this is what stops it
- * clipping through or floating above the grid once it's no longer sitting
- * in its original as-loaded orientation.
+ * After any rotation OR move, dropToBed() re-settles the part so its
+ * lowest point sits exactly at y=0 -- this is what stops it clipping
+ * through or floating above the grid on odd orientations. It intentionally
+ * only corrects Y; X/Z position is left alone so Move mode placement
+ * persists across subsequent rotations/flips.
  */
 export default function BedViewer({ meshUrl, bedDims, onRotatedDimsChange }) {
   const containerRef = useRef(null);
   const stateRef = useRef({});
-  const flipModeRef = useRef(false);
+  const modeRef = useRef("rotate");
+  const bedDimsRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [rotation, setRotation] = useState({ x: 0, y: 0, z: 0 });
-  const [flipMode, setFlipMode] = useState(false);
+  const [mode, setMode] = useState("rotate"); // "rotate" | "move" | "flip"
 
   useEffect(() => {
-    flipModeRef.current = flipMode;
-  }, [flipMode]);
+    modeRef.current = mode;
+  }, [mode]);
+
+  useEffect(() => {
+    bedDimsRef.current = bedDims || null;
+  }, [bedDims]);
 
   // Set up scene once
   useEffect(() => {
@@ -68,16 +75,13 @@ export default function BedViewer({ meshUrl, bedDims, onRotatedDimsChange }) {
     };
     animate();
 
-    // Sits the part flush on the plate and re-centers it in X/Z. Called
-    // after every rotation change so the part can never end up clipping
-    // through or floating above the grid, regardless of orientation.
+    // Corrects Y only, so the part's lowest point sits at the plate.
+    // X/Z are left untouched so a Move-mode placement survives a
+    // subsequent rotation or face-flip instead of snapping back to center.
     function dropToBed() {
-      partGroup.position.set(0, 0, 0);
       const box = new THREE.Box3().setFromObject(partGroup);
       if (!isFinite(box.min.y)) return; // nothing loaded yet
-      const center = new THREE.Vector3();
-      box.getCenter(center);
-      partGroup.position.set(-center.x, -box.min.y, -center.z);
+      partGroup.position.y -= box.min.y;
     }
 
     function reportRotation() {
@@ -94,43 +98,78 @@ export default function BedViewer({ meshUrl, bedDims, onRotatedDimsChange }) {
       onRotatedDimsChange?.({ x: size.x, y: size.y, z: size.z });
     }
 
-    // Drag-to-rotate the part: pointerdown on the mesh disables camera
-    // orbit for that drag and instead spins the part group.
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
-    let dragging = false;
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const planeHit = new THREE.Vector3();
+
+    let dragKind = null; // "rotate" | "move" | null
     let lastX = 0, lastY = 0;
+    let moveGrabOffset = { x: 0, z: 0 };
 
     function setPointerFromEvent(e, rect) {
       pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     }
 
+    function clampToBed() {
+      const dims = bedDimsRef.current;
+      if (!dims) return;
+      const halfX = dims.x / 2;
+      const halfZ = dims.y / 2;
+      partGroup.position.x = THREE.MathUtils.clamp(partGroup.position.x, -halfX, halfX);
+      partGroup.position.z = THREE.MathUtils.clamp(partGroup.position.z, -halfZ, halfZ);
+    }
+
     function onPointerDown(e) {
-      if (flipModeRef.current) return; // clicks in flip mode are handled by onClick instead
+      const currentMode = modeRef.current;
+      if (currentMode === "flip") return; // handled by onClick
+
       const rect = renderer.domElement.getBoundingClientRect();
       setPointerFromEvent(e, rect);
       raycaster.setFromCamera(pointer, camera);
       const hits = raycaster.intersectObject(partGroup, true);
-      if (hits.length > 0) {
-        dragging = true;
-        controls.enabled = false;
-        lastX = e.clientX;
-        lastY = e.clientY;
-      }
-    }
-    function onPointerMove(e) {
-      if (!dragging) return;
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
+      if (hits.length === 0) return;
+
+      controls.enabled = false;
       lastX = e.clientX;
       lastY = e.clientY;
-      partGroup.rotation.y += dx * 0.01;
-      partGroup.rotation.x += dy * 0.01;
+
+      if (currentMode === "move") {
+        dragKind = "move";
+        if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+          moveGrabOffset = { x: planeHit.x - partGroup.position.x, z: planeHit.z - partGroup.position.z };
+        }
+      } else {
+        dragKind = "rotate";
+      }
+    }
+
+    function onPointerMove(e) {
+      if (!dragKind) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+
+      if (dragKind === "move") {
+        setPointerFromEvent(e, rect);
+        raycaster.setFromCamera(pointer, camera);
+        if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+          partGroup.position.x = planeHit.x - moveGrabOffset.x;
+          partGroup.position.z = planeHit.z - moveGrabOffset.z;
+          clampToBed();
+        }
+      } else {
+        const dx = e.clientX - lastX;
+        const dy = e.clientY - lastY;
+        partGroup.rotation.y += dx * 0.01;
+        partGroup.rotation.x += dy * 0.01;
+      }
+      lastX = e.clientX;
+      lastY = e.clientY;
       reportRotation();
     }
+
     function onPointerUp() {
-      dragging = false;
+      dragKind = null;
       controls.enabled = true;
     }
 
@@ -138,7 +177,7 @@ export default function BedViewer({ meshUrl, bedDims, onRotatedDimsChange }) {
     // triangle reorients the part so that face's normal points straight
     // down, then drops it back onto the plate.
     function onClick(e) {
-      if (!flipModeRef.current) return;
+      if (modeRef.current !== "flip") return;
       const rect = renderer.domElement.getBoundingClientRect();
       setPointerFromEvent(e, rect);
       raycaster.setFromCamera(pointer, camera);
@@ -153,8 +192,8 @@ export default function BedViewer({ meshUrl, bedDims, onRotatedDimsChange }) {
 
       partGroup.quaternion.premultiply(alignQuat);
       reportRotation();
-      flipModeRef.current = false;
-      setFlipMode(false);
+      modeRef.current = "rotate";
+      setMode("rotate");
     }
 
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
@@ -208,7 +247,7 @@ export default function BedViewer({ meshUrl, bedDims, onRotatedDimsChange }) {
 
     setLoading(true);
     setError(null);
-    setFlipMode(false);
+    setMode("rotate");
 
     fetch(meshUrl)
       .then((r) => r.json())
@@ -252,10 +291,11 @@ export default function BedViewer({ meshUrl, bedDims, onRotatedDimsChange }) {
       });
   }, [meshUrl]);
 
-  function resetRotation() {
+  function resetPlacement() {
     const { partGroup, reportRotation } = stateRef.current;
     if (!partGroup) return;
     partGroup.rotation.set(0, 0, 0);
+    partGroup.position.set(0, 0, 0);
     reportRotation();
   }
 
@@ -266,9 +306,16 @@ export default function BedViewer({ meshUrl, bedDims, onRotatedDimsChange }) {
     reportRotation();
   }
 
-  function toggleFlipMode() {
-    setFlipMode((v) => !v);
+  function setModeAndSync(next) {
+    setMode((current) => (current === next ? "rotate" : next));
   }
+
+  const hint =
+    mode === "flip"
+      ? "Click a face on the part below."
+      : mode === "move"
+      ? "Drag the part to slide it around the bed."
+      : "Drag the part to rotate. Drag empty space to orbit camera.";
 
   return (
     <div>
@@ -280,7 +327,7 @@ export default function BedViewer({ meshUrl, bedDims, onRotatedDimsChange }) {
           borderRadius: 8,
           overflow: "hidden",
           position: "relative",
-          cursor: flipMode ? "crosshair" : undefined,
+          cursor: mode === "flip" ? "crosshair" : mode === "move" ? "move" : undefined,
         }}
       >
         {loading && (
@@ -288,30 +335,30 @@ export default function BedViewer({ meshUrl, bedDims, onRotatedDimsChange }) {
             Loading part…
           </div>
         )}
-        {flipMode && !loading && (
+        {mode !== "rotate" && !loading && (
           <div style={{ position: "absolute", top: 8, left: 8, background: "rgba(20,22,28,0.85)", color: "#7c8cff", fontSize: 11, padding: "3px 8px", borderRadius: 4, pointerEvents: "none" }}>
-            Click a face to place it flat on the bed
+            {mode === "flip" ? "Click a face to place it flat on the bed" : "Drag the part to move it"}
           </div>
         )}
       </div>
       {error && <div style={{ color: "#e08080", fontSize: 12, marginTop: 4 }}>{error}</div>}
 
       <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ fontSize: 11, color: "#9aa0ab" }}>
-          {flipMode ? "Click a face on the part below." : "Drag the part to rotate. Drag empty space to orbit camera."}
-        </span>
+        <span style={{ fontSize: 11, color: "#9aa0ab" }}>{hint}</span>
+
         <button
-          onClick={toggleFlipMode}
-          style={{
-            fontSize: 11,
-            padding: "2px 8px",
-            background: flipMode ? "#4f5cff" : undefined,
-            color: flipMode ? "#fff" : undefined,
-          }}
+          onClick={() => setModeAndSync("move")}
+          style={{ fontSize: 11, padding: "2px 8px", background: mode === "move" ? "#4f5cff" : undefined, color: mode === "move" ? "#fff" : undefined }}
         >
-          {flipMode ? "Cancel" : "Flip to face"}
+          Move
         </button>
-        <button onClick={resetRotation} style={{ fontSize: 11, padding: "2px 8px" }}>Reset</button>
+        <button
+          onClick={() => setModeAndSync("flip")}
+          style={{ fontSize: 11, padding: "2px 8px", background: mode === "flip" ? "#4f5cff" : undefined, color: mode === "flip" ? "#fff" : undefined }}
+        >
+          Flip to face
+        </button>
+        <button onClick={resetPlacement} style={{ fontSize: 11, padding: "2px 8px" }}>Reset</button>
         {["x", "y", "z"].map((axis) => (
           <span key={axis} style={{ fontSize: 11, color: "#9aa0ab" }}>
             {axis.toUpperCase()}: {rotation[axis].toFixed(0)}°
