@@ -1,40 +1,71 @@
 /**
- * Parses STEP/IGES/STL files into a triangulated mesh using occt-import-js
- * (WASM build of OpenCascade), then derives enclosed volume, surface area,
- * and bounding box. Adapted for the Workers runtime: operates on
- * ArrayBuffers instead of touching the filesystem.
- *
- * NOTE: occt-import-js loads its .wasm binary at init. On Workers this
- * generally needs the wasm module imported directly (e.g.
- * `import occtWasm from "../occt-import-js.wasm"` with a wasm_modules
- * binding, or fetched from an R2/KV-hosted copy) rather than read from
- * disk like it would on Node. Verify this against the current
- * occt-import-js release when wiring it up -- their Workers-compatible
- * init path has changed across versions.
+ * STL is parsed locally (pure JS, no dependencies). STEP/IGES are proxied to
+ * the render-occt-service (see /render-occt-service) instead of running
+ * occt-import-js in-Worker: bundling its ~7.5 MB wasm binary pushed the
+ * Worker script past Cloudflare's free-plan 3 MiB size limit. Running OCCT
+ * as a normal Node dependency on Render sidesteps that ceiling entirely.
  */
 
-// Workers bundles .wasm imports as precompiled WebAssembly.Module objects
-// (not raw bytes), and emscripten's own environment detection misreads
-// Workers as Node (nodejs_compat defines process.versions.node), which
-// routes it into a fs.readFileSync path that doesn't exist here. Handing
-// it the precompiled module via `instantiateWasm` bypasses all of that
-// file-loading logic entirely -- no fs, no fetch, no environment guessing.
-import occtWasmModule from "occt-import-js/dist/occt-import-js.wasm";
-
-let occtInstance = null;
-async function getOcct() {
-  if (!occtInstance) {
-    const { default: occtimportjs } = await import("occt-import-js");
-    occtInstance = await occtimportjs({
-      instantiateWasm(imports, successCallback) {
-        WebAssembly.instantiate(occtWasmModule, imports).then((instance) => {
-          successCallback(instance, occtWasmModule);
-        });
-        return {}; // emscripten expects an (possibly empty) exports object back synchronously
-      },
-    });
+/**
+ * @param {ArrayBuffer} arrayBuffer
+ * @param {"step"|"iges"|"stl"} format
+ * @param {{RENDER_PARSE_URL: string, INTERNAL_PARSE_SECRET: string}} env
+ */
+export async function parseCadFile(arrayBuffer, format, env) {
+  if (format === "stl") {
+    return parseStlBuffer(arrayBuffer);
   }
-  return occtInstance;
+
+  return parseViaRenderService(arrayBuffer, format, env);
+}
+
+async function parseViaRenderService(arrayBuffer, format, env) {
+  if (!env?.RENDER_PARSE_URL || !env?.INTERNAL_PARSE_SECRET) {
+    throw new Error(
+      "RENDER_PARSE_URL / INTERNAL_PARSE_SECRET not configured -- STEP/IGES parsing is unavailable"
+    );
+  }
+
+  // Render's free tier spins down on idle, so a cold start can take
+  // 30-50s. Give this a long timeout rather than failing fast -- the
+  // frontend should show a "warming up" state for uploads, same idea as
+  // the price-fetch polling UX.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
+
+  let response;
+  try {
+    response = await fetch(`${env.RENDER_PARSE_URL}/parse`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        authorization: `Bearer ${env.INTERNAL_PARSE_SECRET}`,
+        "x-format": format,
+      },
+      body: arrayBuffer,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error("CAD parsing service timed out (cold start can take up to a minute -- try again)");
+    }
+    throw new Error(`CAD parsing service unreachable: ${err.message}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!response.ok) {
+    let message = `CAD parsing service returned ${response.status}`;
+    try {
+      const body = await response.json();
+      if (body?.error) message = body.error;
+    } catch {
+      // ignore -- fall back to the generic status message
+    }
+    throw new Error(message);
+  }
+
+  return response.json();
 }
 
 function meshVolumeAndArea(positions, indices) {
@@ -78,40 +109,6 @@ function boundingBox(positions) {
     if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
   }
   return { x_mm: maxX - minX, y_mm: maxY - minY, z_mm: maxZ - minZ };
-}
-
-/**
- * @param {ArrayBuffer} arrayBuffer
- * @param {"step"|"iges"|"stl"} format
- */
-export async function parseCadFile(arrayBuffer, format) {
-  if (format === "stl") {
-    return parseStlBuffer(arrayBuffer);
-  }
-
-  const occt = await getOcct();
-  const fileBytes = new Uint8Array(arrayBuffer);
-  const result =
-    format === "iges" ? occt.ReadIgesFile(fileBytes) : occt.ReadStepFile(fileBytes);
-
-  if (!result.success) {
-    throw new Error(`OCCT failed to parse ${format.toUpperCase()} file`);
-  }
-
-  let positions = [];
-  let indices = [];
-  let indexOffset = 0;
-  for (const meshData of result.meshes) {
-    positions = positions.concat(Array.from(meshData.attributes.position.array));
-    const idx = Array.from(meshData.index.array).map((i) => i + indexOffset);
-    indices = indices.concat(idx);
-    indexOffset += meshData.attributes.position.array.length / 3;
-  }
-
-  const { volume_mm3, surface_area_mm2 } = meshVolumeAndArea(positions, indices);
-  const bbox = boundingBox(positions);
-
-  return { volume_mm3, surface_area_mm2, bbox, mesh: { positions, indices } };
 }
 
 function parseStlBuffer(arrayBuffer) {

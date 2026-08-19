@@ -41,7 +41,7 @@ upload.post("/upload", async (c) => {
 
   try {
     const arrayBuffer = await file.arrayBuffer();
-    const geometry = await parseCadFile(arrayBuffer, format);
+    const geometry = await parseCadFile(arrayBuffer, format, c.env);
     const svg = renderSvgThumbnail(geometry.mesh);
 
     const id = crypto.randomUUID();
