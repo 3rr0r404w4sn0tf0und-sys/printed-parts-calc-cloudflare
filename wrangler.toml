@@ -19,7 +19,7 @@ GITHUB_REPO = "3rr0r404w4sn0tf0und-sys/printed-parts-calc-cloudflare"
 # "https://printed-parts-calc-occt-service.onrender.com". STEP/IGES uploads
 # fail with a clear error if this or INTERNAL_PARSE_SECRET (set via
 # `wrangler secret put INTERNAL_PARSE_SECRET`) is missing.
-RENDER_PARSE_URL = "https://REPLACE_WITH_RENDER_SERVICE_URL.onrender.com"
+RENDER_PARSE_URL = "https://printed-parts-calc-occt.onrender.com"
 
 # Static frontend build output is served directly by Cloudflare for any
 # request that matches a file in here. Anything that doesn't match
