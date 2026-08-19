@@ -102,7 +102,7 @@ app.post("/parse", async (req, res) => {
     const occt = await getOcct();
     const fileBytes = new Uint8Array(req.body);
     const result =
-      format === "iges" ? occt.ReadIgesFile(fileBytes) : occt.ReadStepFile(fileBytes);
+      format === "iges" ? occt.ReadIgesFile(fileBytes, null) : occt.ReadStepFile(fileBytes, null);
 
     if (!result.success) {
       return res.status(422).json({ error: `OCCT failed to parse ${format.toUpperCase()} file` });
